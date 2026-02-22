@@ -1,9 +1,15 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import Alert from "@/components/ui/Alert";
+import Button from "@/components/ui/Button";
+import Card from "@/components/ui/Card";
+import Field from "@/components/ui/Field";
+import Textarea from "@/components/ui/Textarea";
 
 type Props = {
   patientId: string;
+  requestHeaders: Record<string, string>;
 };
 
 type TriageResult = {
@@ -12,7 +18,7 @@ type TriageResult = {
   safetyNotice: string;
 };
 
-export default function TriageAssistantPanel({ patientId }: Props) {
+export default function TriageAssistantPanel({ patientId, requestHeaders }: Props) {
   const [message, setMessage] = useState("");
   const [result, setResult] = useState<TriageResult | null>(null);
   const [error, setError] = useState("");
@@ -24,7 +30,7 @@ export default function TriageAssistantPanel({ patientId }: Props) {
 
     const res = await fetch("/api/ai/triage-assistant", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...requestHeaders },
       body: JSON.stringify({ patientId, message })
     });
 
@@ -39,33 +45,35 @@ export default function TriageAssistantPanel({ patientId }: Props) {
   }
 
   return (
-    <section className="panel grid">
-      <h2>AI Pre-Visit Triage</h2>
-      <div className="notice">
-        This assistant is non-diagnostic and does not replace clinical evaluation.
-      </div>
-      <form className="grid" onSubmit={handleSubmit}>
-        <label>
-          Describe your current symptoms
-          <textarea
-            rows={4}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            required
-          />
-        </label>
-        <button type="submit">Run triage</button>
-      </form>
-      {error ? <div className="notice error">{error}</div> : null}
-      {result ? (
-        <div className="grid">
-          <div>
-            <strong>Suggested urgency:</strong> {result.urgency}
+    <Card>
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold text-slate-900">AI Pre-Visit Triage</h2>
+        <Alert>This assistant is non-diagnostic and does not replace clinical evaluation.</Alert>
+        <form className="space-y-4" onSubmit={handleSubmit}>
+          <Field label="Describe your current symptoms">
+            <Textarea
+              rows={4}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              required
+            />
+          </Field>
+          <Button type="submit">Run triage</Button>
+        </form>
+        {error ? <Alert tone="error">{error}</Alert> : null}
+        {result ? (
+          <div className="space-y-3">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm text-muted">Suggested urgency</p>
+              <p className="mt-1 text-sm font-semibold uppercase text-primary">{result.urgency}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-700">
+              {result.reply}
+            </div>
+            <Alert tone="error">{result.safetyNotice}</Alert>
           </div>
-          <div>{result.reply}</div>
-          <div className="notice error">{result.safetyNotice}</div>
-        </div>
-      ) : null}
-    </section>
+        ) : null}
+      </div>
+    </Card>
   );
 }

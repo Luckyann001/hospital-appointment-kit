@@ -1,9 +1,11 @@
-import { NextResponse } from "next/server";
 import { inferUrgency, TRIAGE_SAFETY_NOTICE } from "@/lib/health/safety";
 import type { TriageResponse } from "@/lib/health/types";
-
-const json = (body: unknown, status = 200) =>
-  NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
+import { getOpenAIClient } from "@/lib/openai/client";
+import { getAuthContext, canAccessPatient } from "@/lib/security/auth";
+import { writeAuditLog } from "@/lib/security/audit";
+import { requestIdFrom, withRequestIdHeaders } from "@/lib/security/observability";
+import { checkRateLimit } from "@/lib/security/rate-limit";
+import { withRetries } from "@/lib/security/retry";
 
 function emergencyResponse(): TriageResponse {
   return {
@@ -15,30 +17,61 @@ function emergencyResponse(): TriageResponse {
 }
 
 export async function POST(request: Request) {
+  const requestId = requestIdFrom(request);
+  const auth = await getAuthContext(request);
+
+  if (!auth) {
+    return withRequestIdHeaders({ error: "Unauthorized." }, requestId, 401);
+  }
+
+  const limit = checkRateLimit(`${auth.tenantId}:${auth.userId}:triage:post`, 12, 60_000);
+  if (!limit.allowed) {
+    return withRequestIdHeaders({ error: "Rate limit exceeded." }, requestId, 429);
+  }
+
   const body = await request.json().catch(() => null);
+  const patientId = typeof body?.patientId === "string" ? body.patientId : "";
   const message = typeof body?.message === "string" ? body.message.trim() : "";
 
-  if (!message) {
-    return json({ error: "message is required." }, 400);
+  if (!message || !patientId) {
+    return withRequestIdHeaders({ error: "patientId and message are required." }, requestId, 400);
+  }
+
+  if (!canAccessPatient(auth, patientId)) {
+    return withRequestIdHeaders({ error: "Forbidden." }, requestId, 403);
   }
 
   if (message.length > 2000) {
-    return json({ error: "message exceeds 2000 characters." }, 400);
+    return withRequestIdHeaders({ error: "message exceeds 2000 characters." }, requestId, 400);
   }
 
   const urgency = inferUrgency(message);
   if (urgency === "emergency") {
-    return json(emergencyResponse());
+    await writeAuditLog({
+      tenantId: auth.tenantId,
+      actorId: auth.userId,
+      actorRole: auth.role,
+      action: "triage.request",
+      resourceType: "triage",
+      outcome: "success",
+      metadata: { urgency: "emergency", bypassedModel: true }
+    });
+
+    return withRequestIdHeaders(emergencyResponse(), requestId, 200);
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return json({
-      urgency,
-      reply:
-        "OpenAI key is not configured. Based on your note, consider scheduling a clinical visit and monitor symptoms for worsening.",
-      safetyNotice: TRIAGE_SAFETY_NOTICE
-    });
+  const client = getOpenAIClient();
+  if (!client) {
+    return withRequestIdHeaders(
+      {
+        urgency,
+        reply:
+          "OpenAI key is not configured. Based on your note, consider scheduling a clinical visit and monitor symptoms for worsening.",
+        safetyNotice: TRIAGE_SAFETY_NOTICE
+      },
+      requestId,
+      200
+    );
   }
 
   try {
@@ -50,51 +83,65 @@ export async function POST(request: Request) {
       "Always include that this is not medical diagnosis."
     ].join(" ");
 
-    const aiRes = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: process.env.OPENAI_TRIAGE_MODEL ?? "gpt-4.1-mini",
-        input: [
-          {
-            role: "system",
-            content: [{ type: "input_text", text: systemPrompt }]
-          },
-          {
-            role: "user",
-            content: [{ type: "input_text", text: message }]
-          }
-        ],
-        temperature: 0.2
-      })
+    const response = await withRetries(
+      () =>
+        client.responses.create({
+          model: process.env.OPENAI_TRIAGE_MODEL ?? "gpt-4.1-mini",
+          input: [
+            {
+              role: "system",
+              content: [{ type: "input_text", text: systemPrompt }]
+            },
+            {
+              role: "user",
+              content: [{ type: "input_text", text: message }]
+            }
+          ],
+          temperature: 0.2
+        }),
+      2,
+      300
+    );
+
+    const reply = response.output_text?.trim() || "Please consult a licensed clinician for evaluation.";
+
+    await writeAuditLog({
+      tenantId: auth.tenantId,
+      actorId: auth.userId,
+      actorRole: auth.role,
+      action: "triage.request",
+      resourceType: "triage",
+      outcome: "success",
+      metadata: { urgency }
     });
 
-    if (!aiRes.ok) {
-      const fallback: TriageResponse = {
+    return withRequestIdHeaders(
+      {
         urgency,
-        reply:
-          "Triage assistant is temporarily unavailable. Please use standard appointment booking to speak with a clinician.",
+        reply,
         safetyNotice: TRIAGE_SAFETY_NOTICE
-      };
-      return json(fallback);
-    }
-
-    const payload = (await aiRes.json()) as { output_text?: string };
-    const reply = payload.output_text?.trim() || "Please consult a licensed clinician for evaluation.";
-
-    return json({
-      urgency,
-      reply,
-      safetyNotice: TRIAGE_SAFETY_NOTICE
-    } satisfies TriageResponse);
+      } satisfies TriageResponse,
+      requestId,
+      200
+    );
   } catch {
-    return json({
-      urgency,
-      reply: "Unable to process triage request right now. Please contact your care team.",
-      safetyNotice: TRIAGE_SAFETY_NOTICE
-    } satisfies TriageResponse);
+    await writeAuditLog({
+      tenantId: auth.tenantId,
+      actorId: auth.userId,
+      actorRole: auth.role,
+      action: "triage.request",
+      resourceType: "triage",
+      outcome: "failure"
+    });
+
+    return withRequestIdHeaders(
+      {
+        urgency,
+        reply: "Unable to process triage request right now. Please contact your care team.",
+        safetyNotice: TRIAGE_SAFETY_NOTICE
+      } satisfies TriageResponse,
+      requestId,
+      200
+    );
   }
 }
