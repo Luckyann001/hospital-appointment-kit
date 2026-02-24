@@ -39,44 +39,36 @@ export default function AppointmentHistory({ role, patientId, requestHeaders, re
   }, [role, patientId, refreshToken, requestHeaders]);
 
   return (
-    <Card>
-      <h2 className="text-xl font-semibold text-slate-900">
-        {role === "provider" ? "Provider Schedule View" : "My Appointments"}
-      </h2>
+    <Card className="rounded-2xl border border-slate-200 bg-white p-6">
+      <h2 className="text-4xl font-semibold text-slate-900">Recent Activity</h2>
+      <p className="mt-1 text-xl text-slate-500">Latest operations and appointments</p>
+
       {items.length === 0 ? (
-        <p className="mt-4 text-sm text-muted">No appointments yet.</p>
+        <p className="mt-5 text-base text-slate-500">No appointments yet.</p>
       ) : (
-        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50">
+        <div className="mt-5 overflow-x-auto rounded-xl border border-slate-200">
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-slate-50 text-slate-600">
               <tr>
-                <th className="px-4 py-3 text-left font-semibold text-slate-700">Date</th>
-                <th className="px-4 py-3 text-left font-semibold text-slate-700">Provider</th>
-                <th className="px-4 py-3 text-left font-semibold text-slate-700">Type</th>
-                <th className="px-4 py-3 text-left font-semibold text-slate-700">Status</th>
-                {role === "provider" ? (
-                  <th className="px-4 py-3 text-left font-semibold text-slate-700">Patient ID</th>
-                ) : null}
-                <th className="px-4 py-3 text-left font-semibold text-slate-700">Reason</th>
+                <th className="px-4 py-3 font-semibold">Date</th>
+                <th className="px-4 py-3 font-semibold">Provider</th>
+                <th className="px-4 py-3 font-semibold">Visit Type</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                {role === "provider" ? <th className="px-4 py-3 font-semibold">Patient ID</th> : null}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-200 bg-white">
+            <tbody className="divide-y divide-slate-200 bg-white text-slate-700">
               {items.map((item) => (
                 <tr key={item.id}>
-                  <td className="whitespace-nowrap px-4 py-3 text-slate-700">
-                    {new Date(item.appointmentDate).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-slate-700">{item.providerName}</td>
-                  <td className="px-4 py-3 text-slate-700">{item.appointmentType}</td>
+                  <td className="whitespace-nowrap px-4 py-3">{new Date(item.appointmentDate).toLocaleString()}</td>
+                  <td className="px-4 py-3">{item.providerName}</td>
+                  <td className="px-4 py-3">{item.appointmentType === "in_person" ? "In-person" : "Telehealth"}</td>
                   <td className="px-4 py-3">
-                    <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                    <span className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
                       {item.status}
                     </span>
                   </td>
-                  {role === "provider" ? (
-                    <td className="px-4 py-3 text-slate-700">{item.patientId}</td>
-                  ) : null}
-                  <td className="px-4 py-3 text-slate-700">{item.reason}</td>
+                  {role === "provider" ? <td className="px-4 py-3">{item.patientId}</td> : null}
                 </tr>
               ))}
             </tbody>
